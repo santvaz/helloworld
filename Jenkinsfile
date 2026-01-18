@@ -43,9 +43,13 @@ pipeline {
                         if (Get-Command docker -ErrorAction SilentlyContinue) { try { docker rm -f jenkins-wiremock | Out-Null } catch {} }
                         if (Test-Path wiremock.pid) { try { Get-Content wiremock.pid | % { Stop-Process -Id $_ -Force } } catch {} Remove-Item wiremock.pid -ErrorAction SilentlyContinue }
 
-                        # Start Flask
-                        $fl = Start-Process -FilePath python -ArgumentList '-u','-c','from app.api import api_application; api_application.run(host="0.0.0.0", port=5000)' -NoNewWindow -PassThru
-                        $fl.Id | Set-Content -Path flask.pid
+                        # Start Flask (fix: usar job en lugar de Start-Process con -c)
+                        $flaskJob = Start-Job -ScriptBlock { 
+                            Set-Location $using:PWD
+                            $env:PYTHONPATH = $using:PWD
+                            python -m app.api
+                        }
+                        $flaskJob.Id | Set-Content -Path flask.pid
 
                         # Start Wiremock (docker or jar)
                         if (Get-Command docker -ErrorAction SilentlyContinue) {
@@ -61,7 +65,14 @@ pipeline {
                         try { python -m pytest --junitxml=result-rest.xml test\\rest } catch { Write-Host "REST tests failed; continuing as green" }
 
                         # Cleanup
-                        if (Test-Path flask.pid) { try { Get-Content flask.pid | % { Stop-Process -Id $_ -Force } } catch {} Remove-Item flask.pid -ErrorAction SilentlyContinue }
+                        if (Test-Path flask.pid) { 
+                            try { 
+                                $jobId = Get-Content flask.pid
+                                Stop-Job -Id $jobId -ErrorAction SilentlyContinue
+                                Remove-Job -Id $jobId -Force -ErrorAction SilentlyContinue
+                            } catch {} 
+                            Remove-Item flask.pid -ErrorAction SilentlyContinue 
+                        }
                         if (Get-Command docker -ErrorAction SilentlyContinue) { try { docker rm -f jenkins-wiremock | Out-Null } catch {} }
                         if (Test-Path wiremock.pid) { try { Get-Content wiremock.pid | % { Stop-Process -Id $_ -Force } } catch {} Remove-Item wiremock.pid -ErrorAction SilentlyContinue }
                     '''
@@ -90,7 +101,7 @@ pipeline {
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     bat '''
                         cd "%WORKSPACE%"
-                        python -m bandit -r app -f json -o bandit.json
+                        python -m bandit -r app -f json -o bandit.json || exit 0
                     '''
                     recordIssues tools: [bandit(pattern: 'bandit.json')],
                         qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true],[threshold: 4, type: 'TOTAL', failure: true]]
@@ -106,9 +117,20 @@ pipeline {
                         Set-Location $env:WORKSPACE
                         $env:PYTHONPATH = $env:WORKSPACE
 
-                        if (Test-Path flask_perf.pid) { try { Get-Content flask_perf.pid | % { Stop-Process -Id $_ -Force } } catch {} Remove-Item flask_perf.pid -ErrorAction SilentlyContinue }
-                        $flp = Start-Process -FilePath python -ArgumentList '-u','-c','from app.api import api_application; api_application.run(host="0.0.0.0", port=5000)' -NoNewWindow -PassThru
-                        $flp.Id | Set-Content -Path flask_perf.pid
+                        if (Test-Path flask_perf.pid) { 
+                            try { 
+                                $jobId = Get-Content flask_perf.pid
+                                Stop-Job -Id $jobId -ErrorAction SilentlyContinue
+                                Remove-Job -Id $jobId -Force -ErrorAction SilentlyContinue
+                            } catch {} 
+                            Remove-Item flask_perf.pid -ErrorAction SilentlyContinue 
+                        }
+                        $flpJob = Start-Job -ScriptBlock { 
+                            Set-Location $using:PWD
+                            $env:PYTHONPATH = $using:PWD
+                            python -m app.api
+                        }
+                        $flpJob.Id | Set-Content -Path flask_perf.pid
 
                         Start-Sleep -Seconds 10
                         Remove-Item -Force results.jtl -ErrorAction SilentlyContinue
@@ -120,7 +142,14 @@ pipeline {
                           Write-Host "jmeter not in PATH; skipping performance"
                         }
 
-                        if (Test-Path flask_perf.pid) { try { Get-Content flask_perf.pid | % { Stop-Process -Id $_ -Force } } catch {} Remove-Item flask_perf.pid -ErrorAction SilentlyContinue }
+                        if (Test-Path flask_perf.pid) { 
+                            try { 
+                                $jobId = Get-Content flask_perf.pid
+                                Stop-Job -Id $jobId -ErrorAction SilentlyContinue
+                                Remove-Job -Id $jobId -Force -ErrorAction SilentlyContinue
+                            } catch {} 
+                            Remove-Item flask_perf.pid -ErrorAction SilentlyContinue 
+                        }
                     '''
                     perfReport sourceDataFiles: 'results.jtl'
                 }
@@ -131,7 +160,7 @@ pipeline {
             steps {
                 unstash 'coverage-report'
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    publishCoverage adapters: [coberturaAdapter('coverage.xml')],
+                    publishCoverage adapters: [istanbulCoberturaAdapter('coverage.xml')],
                         sourceFileResolver: sourceFiles('NEVER_STORE'),
                         globalThresholds: [
                             [thresholdTarget: 'Line', unhealthyThreshold: 85.0, unstableThreshold: 95.0],
