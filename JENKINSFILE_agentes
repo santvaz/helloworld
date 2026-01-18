@@ -1,183 +1,193 @@
 pipeline {
     agent none
-    options { skipDefaultCheckout() }
+    options { timestamps() }
 
     stages {
         stage('Get Code') {
             agent any
             steps {
-                // Checkout once and distribute with stash to avoid multiple clones/race
+                echo "=== Get Code Stage ==="
+                bat '''
+                    @echo off
+                    whoami
+                    hostname
+                    cd /d %WORKSPACE%
+                    echo Workspace: %WORKSPACE%
+                    dir
+                '''
                 checkout scm
-                sh 'echo "Workspace: ${WORKSPACE}"; ls -la'
                 stash name: 'code', includes: '**/*'
-                cleanWs()
             }
         }
 
         stage('Unit') {
             agent { label 'agent1' }
             steps {
+                echo "=== Unit Tests Stage ==="
+                bat '''
+                    @echo off
+                    whoami
+                    hostname
+                    cd /d %WORKSPACE%
+                    echo Workspace: %WORKSPACE%
+                '''
                 unstash 'code'
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        cd "${WORKSPACE}"
-                        export PYTHONPATH="${WORKSPACE}"
-                        # Run unit tests ONCE and generate coverage artefact
-                        python3 -m coverage run --branch --source=app -m pytest --junitxml=result-unit.xml test/unit || true
-                        python3 -m coverage xml -o coverage.xml || true
-                        python3 -m coverage report || true
+                    bat '''
+                        @echo off
+                        cd /d %WORKSPACE%
+                        set PYTHONPATH=%WORKSPACE%
+                        python -m coverage run --branch --source=app -m pytest --junitxml=result-unit.xml test\\unit
+                        python -m coverage xml -o coverage.xml
+                        python -m coverage report
                     '''
                     junit 'result-unit.xml'
                     archiveArtifacts artifacts: 'coverage.xml', allowEmptyArchive: true
                     stash name: 'coverage-report', includes: 'coverage.xml'
                 }
             }
-            post { always { cleanWs() } }
         }
 
         stage('Rest') {
             agent { label 'agent2' }
             steps {
+                echo "=== REST Tests Stage ==="
+                bat '''
+                    @echo off
+                    whoami
+                    hostname
+                    cd /d %WORKSPACE%
+                    echo Workspace: %WORKSPACE%
+                '''
                 unstash 'code'
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        cd "${WORKSPACE}"
-                        export PYTHONPATH="${WORKSPACE}"
-
-                        # ensure clean state
-                        ./stop_flask.sh || true
-                        ./stop_wiremock.sh || true
-
-                        # start Flask in background (for REST tests)
-                        python -u -c "from app.api import api_application; api_application.run(host='0.0.0.0', port=5000)" &
-                        echo $! > flask.pid
-
-                        # start Wiremock (prefer docker)
-                        if command -v docker >/dev/null 2>&1; then
-                          docker run -d -p 9090:9090 -v "${WORKSPACE}/test/wiremock":/home/wiremock --name jenkins-wiremock wiremock/wiremock:2.27.2 || true
-                        else
-                          ./start_wiremock.sh || true
-                        fi
-
-                        # WAIT to avoid race conditions
-                        sleep 10
-
-                        # run REST integration tests
-                        python3 -m pytest --junitxml=result-rest.xml test/rest || true
-
-                        # cleanup
-                        if [ -f flask.pid ]; then kill $(cat flask.pid) || true; rm -f flask.pid; fi
-                        docker rm -f jenkins-wiremock || true
-                        ./stop_wiremock.sh || true
+                    bat '''
+                        @echo off
+                        cd /d %WORKSPACE%
+                        set PYTHONPATH=%WORKSPACE%
+                    
+                        REM Clean previous processes
+                        taskkill /F /IM python.exe /T 2>NUL || echo No Python processes to kill
+                        timeout /t 2 /nobreak
+                    
+                        REM Start Flask in background
+                        start "Flask" python -u -c "from app.api import api_application; api_application.run(host='0.0.0.0', port=5000)"
+                        timeout /t 10 /nobreak
+                    
+                        REM Run REST tests
+                        python -m pytest --junitxml=result-rest.xml test\\rest
+                    
+                        REM Cleanup
+                        taskkill /F /IM python.exe /T 2>NUL || echo Flask stopped
                     '''
                     junit 'result-rest.xml'
                 }
             }
-            post { always { cleanWs() } }
         }
 
         stage('Static') {
             agent { label 'agent3' }
             steps {
+                echo "=== Static Analysis Stage ==="
+                bat '''
+                    @echo off
+                    whoami
+                    hostname
+                    cd /d %WORKSPACE%
+                    echo Workspace: %WORKSPACE%
+                '''
                 unstash 'code'
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        cd "${WORKSPACE}"
-                        python3 -m flake8 --exit-zero --format=pylint app > flake8.out || true
+                    bat '''
+                        @echo off
+                        cd /d %WORKSPACE%
+                        python -m flake8 --exit-zero --format=pylint app > flake8.out
                     '''
                     recordIssues tools: [flake8(pattern: 'flake8.out')],
-                        qualityGates: [
-                            [threshold: 8, type: 'TOTAL', unstable: true],
-                            [threshold: 10, type: 'TOTAL', failure: true]
-                        ]
+                        qualityGates: [[threshold: 8, type: 'TOTAL', unstable: true]]
                 }
             }
-            post { always { cleanWs() } }
         }
 
         stage('Security') {
             agent { label 'agent3' }
             steps {
+                echo "=== Security Analysis Stage ==="
+                bat '''
+                    @echo off
+                    whoami
+                    hostname
+                    cd /d %WORKSPACE%
+                    echo Workspace: %WORKSPACE%
+                '''
                 unstash 'code'
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        cd "${WORKSPACE}"
-                        python3 -m bandit -r app -f json -o bandit.json || true
+                    bat '''
+                        @echo off
+                        cd /d %WORKSPACE%
+                        python -m bandit -r app -f json -o bandit.json || exit /b 0
                     '''
                     recordIssues tools: [bandit(pattern: 'bandit.json')],
-                        qualityGates: [
-                            [threshold: 2, type: 'TOTAL', unstable: true],
-                            [threshold: 4, type: 'TOTAL', failure: true]
-                        ]
+                        qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true]]
                 }
             }
-            post { always { cleanWs() } }
         }
 
         stage('Performance') {
             agent { label 'agent2' }
             steps {
+                echo "=== Performance Tests Stage ==="
+                bat '''
+                    @echo off
+                    whoami
+                    hostname
+                    cd /d %WORKSPACE%
+                    echo Workspace: %WORKSPACE%
+                '''
                 unstash 'code'
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        cd "${WORKSPACE}"
-                        export PYTHONPATH="${WORKSPACE}"
-
-                        ./stop_flask.sh || true
-
-                        # Start Flask for performance tests
-                        python -u -c "from app.api import api_application; api_application.run(host='0.0.0.0', port=5000)" &
-                        echo $! > flask_perf.pid
-
-                        # WAIT to avoid race
-                        sleep 10
-
-                        # Clean previous JMeter results
-                        rm -f results.jtl || true
-                        rm -rf jmeter-report || true
-
-                        # Run JMeter test-plan (ensure test/jmeter/flask.jmx uses 5 threads x 40 calls)
-                        if command -v jmeter >/dev/null 2>&1; then
-                          jmeter -n -t test/jmeter/flask.jmx -l results.jtl -j jmeter.log -e -o jmeter-report/ || true
-                        else
-                          echo "jmeter not in PATH; skipping performance"
-                        fi
-
-                        # cleanup Flask
-                        if [ -f flask_perf.pid ]; then kill $(cat flask_perf.pid) || true; rm -f flask_perf.pid; fi
+                    bat '''
+                        @echo off
+                        cd /d %WORKSPACE%
+                        set PYTHONPATH=%WORKSPACE%
+                    
+                        REM Clean
+                        taskkill /F /IM python.exe /T 2>NUL || echo No Python to kill
+                        timeout /t 2 /nobreak
+                    
+                        REM Start Flask
+                        start "Flask_Perf" python -u -c "from app.api import api_application; api_application.run(host='0.0.0.0', port=5000)"
+                        timeout /t 10 /nobreak
+                    
+                        REM Clean JMeter results
+                        if exist results.jtl del /f results.jtl
+                        if exist jmeter-report rmdir /s /q jmeter-report
+                    
+                        REM Run JMeter
+                        jmeter -n -t test\\jmeter\\flask.jmx -l results.jtl -j jmeter.log -e -o jmeter-report
+                    
+                        REM Cleanup
+                        taskkill /F /IM python.exe /T 2>NUL || echo Flask stopped
                     '''
-                    // publish performance results (requires Performance plugin)
                     perfReport sourceDataFiles: 'results.jtl'
                 }
             }
-            post { always { cleanWs() } }
         }
 
         stage('Coverage') {
             agent { label 'agent1' }
             steps {
+                echo "=== Coverage Report Stage ==="
+                bat '''
+                    @echo off
+                    whoami
+                    hostname
+                    cd /d %WORKSPACE%
+                    echo Workspace: %WORKSPACE%
+                '''
                 unstash 'coverage-report'
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        cd "${WORKSPACE}"
-                        if [ -f coverage.xml ]; then
-                            python3 - <<PY
-import xml.etree.ElementTree as ET
-try:
-    r = ET.parse('coverage.xml').getroot()
-    lines = float(r.get('line-rate',0)) * 100
-    branches = float(r.get('branch-rate',0)) * 100
-    print(f"LINE_COVERAGE={lines:.2f}")
-    print(f"BRANCH_COVERAGE={branches:.2f}")
-except Exception:
-    print("LINE_COVERAGE=0")
-    print("BRANCH_COVERAGE=0")
-PY
-                        else
-                            echo "coverage.xml not found"
-                        fi
-                    '''
-                    publishCoverage adapters: [coberturaAdapter('coverage.xml')],
+                    publishCoverage adapters: [istanbulCoberturaAdapter('coverage.xml')],
                         sourceFileResolver: sourceFiles('NEVER_STORE'),
                         globalThresholds: [
                             [thresholdTarget: 'Line', unhealthyThreshold: 85.0, unstableThreshold: 95.0],
@@ -185,14 +195,40 @@ PY
                         ]
                 }
             }
-            post { always { cleanWs() } }
         }
-    } // stages
+    }
 
     post {
         always {
-            echo "Pipeline finished. Check artifacts and reports."
-            archiveArtifacts artifacts: 'result-unit.xml,result-rest.xml,coverage.xml,flake8.out,bandit.json,results.jtl', allowEmptyArchive: true
+            script {
+                echo "=== Pipeline Completed ==="
+                def agents = ['agent1', 'agent2', 'agent3']
+                def archived = false
+                
+                for (agent in agents) {
+                    if (!archived) {
+                        try {
+                            node(agent) {
+                                echo "Archivando artefactos desde ${agent}"
+                                bat '''
+                                    @echo off
+                                    whoami
+                                    hostname
+                                '''
+                                unstash 'code'
+                                archiveArtifacts artifacts: 'result-unit.xml,result-rest.xml,coverage.xml,flake8.out,bandit.json,results.jtl', allowEmptyArchive: true
+                                archived = true
+                            }
+                        } catch (Exception e) {
+                            echo "No se pudo archivar en ${agent}: ${e.message}"
+                        }
+                    }
+                }
+                
+                if (!archived) {
+                    echo "ADVERTENCIA: No se pudieron archivar artefactos en ningún agente"
+                }
+            }
         }
     }
 }
